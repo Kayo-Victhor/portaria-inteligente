@@ -1,0 +1,151 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+enum Role {
+  ADMIN
+  CONCIERGE
+  RESIDENT
+}
+
+enum VisitorType {
+  GUEST            // Visita social (exige apenas nome)
+  SERVICE_PROVIDER // Prestador de serviço (exige documento obrigatório via Zod)
+  DELIVERY_COURIER // Entregador autorizado
+}
+
+enum PassStatus {
+  ACTIVE
+  USED
+  EXPIRED
+  REVOKED
+}
+
+enum AccessDirection {
+  ENTRY
+  EXIT
+}
+
+enum DeliveryStatus {
+  PENDING
+  PICKED_UP
+}
+
+model Unit {
+  id        String   @id @default(uuid())
+  block     String   @db.VarChar(20)  // Ex: "Bloco A", "Torre 1"
+  number    String   @db.VarChar(20)  // Ex: "101", "204-B"
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  residents     User[]
+  visitorPasses VisitorPass[]
+  deliveries    Delivery[]
+
+  // Garante que não existam dois apartamentos iguais no mesmo bloco
+  @@unique([block, number])
+  @@map("units")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  name         String   @db.VarChar(120)
+  email        String   @unique @db.VarChar(150)
+  passwordHash String   @db.VarChar(255)
+  role         Role     @default(RESIDENT)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Opcional porque ADMIN e CONCIERGE não pertencem a um apartamento
+  unitId String?
+  unit   Unit?   @relation(fields: [unitId], references: [id], onDelete: SetNull)
+
+  refreshTokens  RefreshToken[]
+  createdPasses  VisitorPass[]  @relation("CreatedByResident")
+  validatedLogs  AccessLog[]    @relation("ValidatedByConcierge")
+  receivedOrders Delivery[]     @relation("ReceivedByConcierge")
+
+  @@index([unitId])
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  tokenHash String   @unique @db.VarChar(255)
+  expiresAt DateTime
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model VisitorPass {
+  id              String      @id @default(uuid())
+  code            String      @unique @db.VarChar(12) // Código curto/PIN para digitar ou ler no QR Code
+  visitorName     String      @db.VarChar(120)
+  visitorDocument String?     @db.VarChar(30) // CPF/RG (obrigatório se SERVICE_PROVIDER)
+  visitorType     VisitorType @default(GUEST)
+  singleUse       Boolean     @default(true)
+  status          PassStatus  @default(ACTIVE)
+  validFrom       DateTime
+  validUntil      DateTime
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  unitId      String
+  unit        Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  createdById String
+  createdBy   User   @relation("CreatedByResident", fields: [createdById], references: [id], onDelete: Restrict)
+
+  accessLogs AccessLog[]
+
+  // Índices para busca instantânea na tela do porteiro
+  @@index([code, status])
+  @@index([unitId])
+  @@map("visitor_passes")
+}
+
+model AccessLog {
+  id        String          @id @default(uuid())
+  direction AccessDirection
+  notes     String?         @db.VarChar(255) // Ex: Placa do veículo ou observação da portaria
+  timestamp DateTime        @default(now())
+
+  passId      String
+  pass        VisitorPass @relation(fields: [passId], references: [id], onDelete: Restrict)
+  conciergeId String
+  concierge   User        @relation("ValidatedByConcierge", fields: [conciergeId], references: [id], onDelete: Restrict)
+
+  @@index([passId])
+  @@index([timestamp])
+  @@map("access_logs")
+}
+
+model Delivery {
+  id           String         @id @default(uuid())
+  trackingCode String?        @db.VarChar(100)
+  carrier      String         @db.VarChar(80)  // Ex: Correios, Mercado Livre, iFood
+  description  String?        @db.VarChar(255) // Ex: Caixa média, envelope
+  pickupPinHash String        @db.VarChar(255) // Hash Argon2id do PIN de 4 dígitos gerado para o morador
+  status       DeliveryStatus @default(PENDING)
+  receivedAt   DateTime       @default(now())
+  pickedUpAt   DateTime?
+  pickedUpBy   String?        @db.VarChar(120) // Nome de quem retirou na portaria
+
+  unitId       String
+  unit         Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  receivedById String
+  receivedBy   User   @relation("ReceivedByConcierge", fields: [receivedById], references: [id], onDelete: Restrict)
+
+  @@index([unitId, status])
+  @@map("deliveries")
+}
