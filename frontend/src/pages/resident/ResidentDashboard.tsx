@@ -85,6 +85,30 @@ export function ResidentDashboard() {
     };
   }, []);
 
+  useEffect(() => {
+    async function silentRefresh() {
+      if (document.hidden) return; // Não faz requisições se a aba estiver minimizada
+      try {
+        const [passesRes, deliveriesRes] = await Promise.all([
+          api.get<{ passes: VisitorPass[] }>("/passes/my-unit"),
+          api.get<{ deliveries: Delivery[] }>("/deliveries/my-unit"),
+        ]);
+        setPasses(passesRes.data.passes);
+        setDeliveries(deliveriesRes.data.deliveries);
+      } catch {
+        // Ignora falhas momentâneas de rede em segundo plano
+      }
+    }
+
+    const intervalId = setInterval(silentRefresh, 10000);
+    window.addEventListener("focus", silentRefresh);
+
+    return () => {
+      clearInterval(intervalId);
+      window.removeEventListener("focus", silentRefresh);
+    };
+  }, []);
+
   async function handleRefresh() {
     setLoading(true);
     try {

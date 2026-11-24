@@ -8,7 +8,9 @@ import {
   Clock,
   AlertCircle,
   Plus,
+  QrCode,
 } from "lucide-react";
+import { QrScannerModal } from "../../components/QrScannerModal";
 import { AxiosError } from "axios";
 import { api } from "../../api/client";
 import { AppLayout } from "../../components/AppLayout";
@@ -42,6 +44,7 @@ export function ConciergeDashboard() {
 
   // Estados de Validação de Acesso
   const [searchCode, setSearchCode] = useState("");
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [checkedData, setCheckedData] = useState<CheckedPassResponse | null>(
     null,
   );
@@ -115,13 +118,40 @@ export function ConciergeDashboard() {
     setLogs(logsRes.data.logs);
     setDeliveries(deliveriesRes.data.deliveries);
   }
+  useEffect(() => {
+    let isMounted = true;
 
-  async function handleCheckCode(e: FormEvent) {
-    e.preventDefault();
+    async function silentRefresh() {
+      if (document.hidden) return;
+      try {
+        const [logsRes, deliveriesRes] = await Promise.all([
+          api.get<{ logs: AccessLogItem[] }>("/passes/logs"),
+          api.get<{ deliveries: Delivery[] }>("/deliveries"),
+        ]);
+        if (isMounted) {
+          setLogs(logsRes.data.logs);
+          setDeliveries(deliveriesRes.data.deliveries);
+        }
+      } catch {
+        // Ignora falhas momentâneas de rede em segundo plano
+      }
+    }
+
+    const intervalId = setInterval(silentRefresh, 10000);
+    window.addEventListener("focus", silentRefresh);
+
+    return () => {
+      isMounted = false;
+      clearInterval(intervalId);
+      window.removeEventListener("focus", silentRefresh);
+    };
+  }, []);
+
+  async function verifyPassCode(rawCode: string) {
     setAccessMessage(null);
     setCheckedData(null);
 
-    const normalized = searchCode.trim().toUpperCase();
+    const normalized = rawCode.trim().toUpperCase();
     if (!normalized) return;
 
     setSubmitting(true);
@@ -140,6 +170,17 @@ export function ConciergeDashboard() {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  async function handleCheckCode(e: FormEvent) {
+    e.preventDefault();
+    await verifyPassCode(searchCode);
+  }
+
+  function handleQrDetected(code: string) {
+    setIsScannerOpen(false);
+    setSearchCode(code);
+    verifyPassCode(code);
   }
 
   async function handleRegisterAccess(direction: "ENTRY" | "EXIT") {
@@ -301,6 +342,15 @@ export function ConciergeDashboard() {
                   className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm uppercase focus:border-slate-900 focus:outline-none"
                 />
                 <button
+                  type="button"
+                  onClick={() => setIsScannerOpen(true)}
+                  title="Ler QR Code pela câmera"
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+                >
+                  <QrCode className="h-4 w-4" />
+                  <span className="hidden sm:inline">QR</span>
+                </button>
+                <button
                   type="submit"
                   disabled={submitting}
                   className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800 disabled:opacity-60"
@@ -308,6 +358,13 @@ export function ConciergeDashboard() {
                   Verificar
                 </button>
               </form>
+
+              {isScannerOpen && (
+                <QrScannerModal
+                  onScanSuccess={handleQrDetected}
+                  onClose={() => setIsScannerOpen(false)}
+                />
+              )}
 
               {accessMessage && (
                 <div

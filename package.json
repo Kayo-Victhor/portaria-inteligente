@@ -3,6 +3,7 @@
   "private": true,
   "scripts": {
     "dev": "concurrently -n \"API,WEB\" -c \"blue,green\" \"pnpm --dir backend dev\" \"pnpm --dir frontend dev\"",
+    "dev:mobile": "concurrently \"pnpm --filter backend dev\" \"pnpm --filter frontend dev:mobile\"",
     "dev:api": "pnpm --dir backend dev",
     "dev:web": "pnpm --dir frontend dev",
     "db:seed": "pnpm --dir backend exec tsx prisma/seed.ts"
