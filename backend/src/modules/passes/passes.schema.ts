@@ -20,20 +20,6 @@ export const createPassSchema = z
     validFrom: z.coerce.date({ error: "Data/hora de início inválida." }),
     validUntil: z.coerce.date({ error: "Data/hora de expiração inválida." }),
   })
-  .refine(
-    (data) => {
-      if (data.visitorType === "SERVICE_PROVIDER") {
-        return Boolean(
-          data.visitorDocument && data.visitorDocument.length >= 5,
-        );
-      }
-      return true;
-    },
-    {
-      message: "Documento (CPF/RG) é obrigatório para prestadores de serviço.",
-      path: ["visitorDocument"],
-    },
-  )
   .refine((data) => data.validUntil > data.validFrom, {
     message: "A data de expiração deve ser posterior à data de início.",
     path: ["validUntil"],
@@ -55,6 +41,12 @@ export const registerAccessSchema = z.object({
     .min(6)
     .max(12),
   direction: z.enum(["ENTRY", "EXIT"]),
+  visitorDocument: z
+    .string()
+    .trim()
+    .max(30, "Documento muito longo.")
+    .optional()
+    .nullable(),
   notes: z.string().trim().max(255).optional().nullable(),
 });
 

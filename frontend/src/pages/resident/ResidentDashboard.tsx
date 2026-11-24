@@ -261,12 +261,10 @@ export function ResidentDashboard() {
 
                   <div>
                     <label className="mb-1 block text-xs font-medium text-slate-700">
-                      Documento{" "}
-                      {visitorType === "SERVICE_PROVIDER" ? "*" : "(Opcional)"}
+                      Documento (Opcional)
                     </label>
                     <input
                       type="text"
-                      required={visitorType === "SERVICE_PROVIDER"}
                       value={visitorDocument}
                       onChange={(e) => setVisitorDocument(e.target.value)}
                       placeholder="CPF ou RG"

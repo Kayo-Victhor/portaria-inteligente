@@ -142,6 +142,8 @@ export class PassesService {
     }
 
     const now = new Date();
+    const resolvedDocument =
+      data.visitorDocument?.trim() || pass.visitorDocument;
 
     if (data.direction === "ENTRY") {
       if (pass.status === "REVOKED") {
@@ -168,9 +170,23 @@ export class PassesService {
           400,
         );
       }
+
+      if (
+        pass.visitorType === "SERVICE_PROVIDER" &&
+        (!resolvedDocument || resolvedDocument.length < 5)
+      ) {
+        throw new AppError(
+          "Documento (CPF/RG) é obrigatório para liberar a entrada de prestadores de serviço.",
+          400,
+        );
+      }
     }
 
-    // Transação atômica: cria o log de acesso e atualiza o status do passe se for entrada de uso único
+    const shouldUpdateStatus = data.direction === "ENTRY" && pass.singleUse;
+    const shouldUpdateDocument =
+      Boolean(data.visitorDocument?.trim()) &&
+      data.visitorDocument?.trim() !== pass.visitorDocument;
+
     const [accessLog, updatedPass] = await prisma.$transaction([
       prisma.accessLog.create({
         data: {
@@ -180,11 +196,16 @@ export class PassesService {
           conciergeId,
         },
       }),
-      ...(data.direction === "ENTRY" && pass.singleUse
+      ...(shouldUpdateStatus || shouldUpdateDocument
         ? [
             prisma.visitorPass.update({
               where: { id: pass.id },
-              data: { status: "USED" },
+              data: {
+                ...(shouldUpdateStatus ? { status: "USED" } : {}),
+                ...(shouldUpdateDocument
+                  ? { visitorDocument: resolvedDocument }
+                  : {}),
+              },
             }),
           ]
         : [prisma.visitorPass.findUniqueOrThrow({ where: { id: pass.id } })]),
