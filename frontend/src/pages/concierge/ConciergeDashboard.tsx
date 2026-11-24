@@ -9,47 +9,86 @@ import {
   AlertCircle,
   Plus,
   QrCode,
+  BookOpen,
 } from "lucide-react";
-import { QrScannerModal } from "../../components/QrScannerModal";
 import { AxiosError } from "axios";
 import { api } from "../../api/client";
 import { AppLayout } from "../../components/AppLayout";
-import type { Delivery, Unit, VisitorPass, VisitorType } from "../../types";
+import { QrScannerModal } from "../../components/QrScannerModal";
+import { OccurrencesBoard } from "../../components/OccurrencesBoard";
+
+interface UnitOption {
+  id: string;
+  block: string;
+  number: string;
+}
 
 interface CheckedPassResponse {
-  pass: VisitorPass;
-  validation: {
-    canEnter: boolean;
-    isExpiredByTime: boolean;
-    isTooEarly: boolean;
+  pass: {
+    id: string;
+    code: string;
+    visitorName: string;
+    visitorDocument: string | null;
+    visitorType: "VISITOR" | "SERVICE_PROVIDER";
+    companyName?: string | null;
+    status: "ACTIVE" | "USED" | "EXPIRED" | "REVOKED";
+    validFrom: string;
+    validUntil: string;
+    unit: {
+      block: string;
+      number: string;
+    };
+    createdBy: {
+      name: string;
+    };
   };
+  suggestedAction: "ENTRY" | "EXIT";
 }
 
 interface AccessLogItem {
   id: string;
-  direction: "ENTRY" | "EXIT";
-  notes: string | null;
+  action: "ENTRY" | "EXIT";
   timestamp: string;
-  pass: {
-    code: string;
+  pass?: {
     visitorName: string;
-    visitorType: VisitorType;
-    unit: { block: string; number: string };
+    visitorType: "VISITOR" | "SERVICE_PROVIDER";
+    unit?: {
+      block: string;
+      number: string;
+    };
   };
-  concierge: { id: string; name: string };
+  registeredBy?: { name: string } | null;
+  concierge?: { name: string } | null;
+  user?: { name: string } | null;
+}
+
+interface Delivery {
+  id: string;
+  description: string;
+  trackingCode: string | null;
+  status: "PENDING" | "PICKED_UP";
+  arrivedAt: string;
+  pickedUpAt: string | null;
+  pickedUpBy: string | null;
+  unit: {
+    id: string;
+    block: string;
+    number: string;
+  };
 }
 
 export function ConciergeDashboard() {
-  const [activeTab, setActiveTab] = useState<"access" | "deliveries">("access");
+  const [activeTab, setActiveTab] = useState<
+    "access" | "deliveries" | "occurrences"
+  >("access");
 
-  // Estados de Validação de Acesso
+  // Estados de Acesso / Convites
   const [searchCode, setSearchCode] = useState("");
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [checkedData, setCheckedData] = useState<CheckedPassResponse | null>(
     null,
   );
   const [visitorDocument, setVisitorDocument] = useState("");
-  const [accessNotes, setAccessNotes] = useState("");
   const [accessMessage, setAccessMessage] = useState<{
     type: "success" | "error";
     text: string;
@@ -57,43 +96,50 @@ export function ConciergeDashboard() {
   const [logs, setLogs] = useState<AccessLogItem[]>([]);
 
   // Estados de Encomendas
-  const [units, setUnits] = useState<Unit[]>([]);
+  const [units, setUnits] = useState<UnitOption[]>([]);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
-  const [unitId, setUnitId] = useState("");
-  const [carrier, setCarrier] = useState("");
-  const [trackingCode, setTrackingCode] = useState("");
-  const [description, setDescription] = useState("");
-  const [createdPinBanner, setCreatedPinBanner] = useState<{
-    unitLabel: string;
-    pin: string;
+  const [deliveryUnitId, setDeliveryUnitId] = useState("");
+  const [deliveryDescription, setDeliveryDescription] = useState("");
+  const [deliveryTracking, setDeliveryTracking] = useState("");
+  const [deliveryMessage, setDeliveryMessage] = useState<{
+    type: "success" | "error";
+    text: string;
   } | null>(null);
 
-  // Estados de Baixa de Encomenda
-  const [pickupTarget, setPickupTarget] = useState<Delivery | null>(null);
+  // Confirmação de retirada de encomenda
+  const [pickupTargetId, setPickupTargetId] = useState<string | null>(null);
   const [pickupPin, setPickupPin] = useState("");
   const [pickedUpBy, setPickedUpBy] = useState("");
-  const [pickupError, setPickupError] = useState("");
 
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+
+  async function refreshOperationalData() {
+    const [logsRes, deliveriesRes] = await Promise.all([
+      api.get<{ logs: AccessLogItem[] }>("/passes/logs"),
+      api.get<{ deliveries: Delivery[] }>("/deliveries"),
+    ]);
+    setLogs(logsRes.data.logs);
+    setDeliveries(deliveriesRes.data.deliveries);
+  }
 
   useEffect(() => {
     let isMounted = true;
 
     async function loadInitialData() {
       try {
-        const [logsRes, unitsRes, deliveriesRes] = await Promise.all([
+        const [logsRes, deliveriesRes, unitsRes] = await Promise.all([
           api.get<{ logs: AccessLogItem[] }>("/passes/logs"),
-          api.get<{ units: Unit[] }>("/units"),
           api.get<{ deliveries: Delivery[] }>("/deliveries"),
+          api.get<{ units: UnitOption[] }>("/units"),
         ]);
 
         if (isMounted) {
           setLogs(logsRes.data.logs);
-          setUnits(unitsRes.data.units);
           setDeliveries(deliveriesRes.data.deliveries);
+          setUnits(unitsRes.data.units);
           if (unitsRes.data.units.length > 0) {
-            setUnitId(unitsRes.data.units[0].id);
+            setDeliveryUnitId(unitsRes.data.units[0].id);
           }
         }
       } finally {
@@ -110,14 +156,7 @@ export function ConciergeDashboard() {
     };
   }, []);
 
-  async function refreshOperationalData() {
-    const [logsRes, deliveriesRes] = await Promise.all([
-      api.get<{ logs: AccessLogItem[] }>("/passes/logs"),
-      api.get<{ deliveries: Delivery[] }>("/deliveries"),
-    ]);
-    setLogs(logsRes.data.logs);
-    setDeliveries(deliveriesRes.data.deliveries);
-  }
+  // Sincronização silenciosa a cada 10s ou ao focar na janela
   useEffect(() => {
     let isMounted = true;
 
@@ -183,34 +222,48 @@ export function ConciergeDashboard() {
     verifyPassCode(code);
   }
 
-  async function handleRegisterAccess(direction: "ENTRY" | "EXIT") {
+  async function handleRegisterAccess(action: "ENTRY" | "EXIT") {
     if (!checkedData) return;
-    setAccessMessage(null);
+
+    if (
+      checkedData.pass.visitorType === "SERVICE_PROVIDER" &&
+      !visitorDocument.trim()
+    ) {
+      setAccessMessage({
+        type: "error",
+        text: "Informe o CPF ou RG do prestador de serviço antes de liberar.",
+      });
+      return;
+    }
+
     setSubmitting(true);
+    setAccessMessage(null);
 
     try {
-      await api.post("/passes/access", {
-        code: checkedData.pass.code,
-        direction,
-        visitorDocument: visitorDocument.trim() || null,
-        notes: accessNotes.trim() || null,
+      await api.post(`/passes/${checkedData.pass.id}/register`, {
+        action,
+        visitorDocument: visitorDocument.trim() || undefined,
       });
 
       setAccessMessage({
         type: "success",
         text:
-          direction === "ENTRY"
-            ? `Entrada liberada para ${checkedData.pass.visitorName}.`
+          action === "ENTRY"
+            ? `Entrada registrada para ${checkedData.pass.visitorName}.`
             : `Saída registrada para ${checkedData.pass.visitorName}.`,
       });
       setCheckedData(null);
       setSearchCode("");
       setVisitorDocument("");
-      setAccessNotes("");
       await refreshOperationalData();
     } catch (err) {
       if (err instanceof AxiosError && err.response?.data?.message) {
         setAccessMessage({ type: "error", text: err.response.data.message });
+      } else {
+        setAccessMessage({
+          type: "error",
+          text: "Erro ao registrar movimentação.",
+        });
       }
     } finally {
       setSubmitting(false);
@@ -219,32 +272,33 @@ export function ConciergeDashboard() {
 
   async function handleCreateDelivery(e: FormEvent) {
     e.preventDefault();
-    setCreatedPinBanner(null);
+    setDeliveryMessage(null);
     setSubmitting(true);
 
     try {
-      const response = await api.post<{
-        delivery: Delivery;
-        pickupPin: string;
-      }>("/deliveries", {
-        unitId,
-        carrier,
-        trackingCode: trackingCode.trim() || null,
-        description: description.trim() || null,
+      await api.post("/deliveries", {
+        unitId: deliveryUnitId,
+        description: deliveryDescription,
+        trackingCode: deliveryTracking.trim() || undefined,
       });
 
-      const created = response.data.delivery;
-      setDeliveries((prev) => [created, ...prev]);
-      setCreatedPinBanner({
-        unitLabel: `${created.unit.block} - Apto ${created.unit.number}`,
-        pin: response.data.pickupPin,
+      setDeliveryMessage({
+        type: "success",
+        text: "Encomenda registrada! O morador já pode visualizar o PIN de retirada.",
       });
-      setCarrier("");
-      setTrackingCode("");
-      setDescription("");
+      setDeliveryDescription("");
+      setDeliveryTracking("");
+      await refreshOperationalData();
     } catch (err) {
-      if (err instanceof AxiosError && err.response?.data?.message) {
-        alert(err.response.data.message);
+      if (err instanceof AxiosError && err.response?.data) {
+        const data = err.response.data;
+        setDeliveryMessage({
+          type: "error",
+          text:
+            data.issues?.[0]?.message ||
+            data.message ||
+            "Erro ao registrar encomenda.",
+        });
       }
     } finally {
       setSubmitting(false);
@@ -253,43 +307,43 @@ export function ConciergeDashboard() {
 
   async function handleConfirmPickup(e: FormEvent) {
     e.preventDefault();
-    if (!pickupTarget) return;
-    setPickupError("");
+    if (!pickupTargetId) return;
+
+    setDeliveryMessage(null);
     setSubmitting(true);
 
     try {
-      const response = await api.patch<{ delivery: Delivery }>(
-        `/deliveries/${pickupTarget.id}/pickup`,
-        {
-          pin: pickupPin,
-          pickedUpBy,
-        },
-      );
+      await api.patch(`/deliveries/${pickupTargetId}/pickup`, {
+        pin: pickupPin.trim(),
+        pickedUpBy: pickedUpBy.trim(),
+      });
 
-      setDeliveries((prev) =>
-        prev.map((d) =>
-          d.id === pickupTarget.id ? response.data.delivery : d,
-        ),
-      );
-      setPickupTarget(null);
+      setDeliveryMessage({
+        type: "success",
+        text: "Retirada confirmada com sucesso!",
+      });
+      setPickupTargetId(null);
       setPickupPin("");
       setPickedUpBy("");
+      await refreshOperationalData();
     } catch (err) {
       if (err instanceof AxiosError && err.response?.data?.message) {
-        setPickupError(err.response.data.message);
+        setDeliveryMessage({ type: "error", text: err.response.data.message });
       } else {
-        setPickupError("Erro ao confirmar retirada.");
+        setDeliveryMessage({
+          type: "error",
+          text: "Erro ao validar retirada.",
+        });
       }
     } finally {
       setSubmitting(false);
     }
   }
 
-  const pendingCount = deliveries.filter((d) => d.status === "PENDING").length;
-
   return (
     <AppLayout>
-      <div className="mb-6 flex gap-2 border-b border-slate-200">
+      {/* Navegação por Abas */}
+      <div className="mb-6 flex border-b border-slate-200">
         <button
           type="button"
           onClick={() => setActiveTab("access")}
@@ -314,21 +368,29 @@ export function ConciergeDashboard() {
         >
           <Package className="h-4 w-4" />
           <span>Encomendas</span>
-          {pendingCount > 0 && (
-            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">
-              {pendingCount}
-            </span>
-          )}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab("occurrences")}
+          className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition ${
+            activeTab === "occurrences"
+              ? "border-slate-900 text-slate-900"
+              : "border-transparent text-slate-500 hover:text-slate-700"
+          }`}
+        >
+          <BookOpen className="h-4 w-4" />
+          <span>Livro de Turno</span>
         </button>
       </div>
 
-      {activeTab === "access" ? (
+      {/* ABA 1: CONTROLE DE ACESSO */}
+      {activeTab === "access" && (
         <div className="grid gap-6 lg:grid-cols-12">
-          {/* Validador de Passe */}
           <div className="lg:col-span-5">
             <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs">
               <h2 className="mb-4 text-base font-semibold text-slate-900">
-                Validar Código de Convite
+                Validar Convite / QR Code
               </h2>
 
               <form onSubmit={handleCheckCode} className="flex gap-2">
@@ -368,74 +430,81 @@ export function ConciergeDashboard() {
 
               {accessMessage && (
                 <div
-                  className={`mt-4 flex items-center gap-2 rounded-lg border px-3 py-2.5 text-sm ${
+                  className={`mt-4 flex items-start gap-2 rounded-lg border px-3 py-2.5 text-xs ${
                     accessMessage.type === "success"
                       ? "border-emerald-200 bg-emerald-50 text-emerald-800"
                       : "border-red-200 bg-red-50 text-red-700"
                   }`}
                 >
-                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                   <span>{accessMessage.text}</span>
                 </div>
               )}
 
               {checkedData && (
-                <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="mt-3 space-y-2.5">
-                    <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-700">
-                        Documento (CPF/RG){" "}
-                        {checkedData.pass.visitorType ===
-                          "SERVICE_PROVIDER" && (
-                          <span className="text-red-600">
-                            * (Obrigatório para prestador)
-                          </span>
-                        )}
-                      </label>
-                      <input
-                        type="text"
-                        value={visitorDocument}
-                        onChange={(e) => setVisitorDocument(e.target.value)}
-                        placeholder="Informe o CPF ou RG conferido"
-                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs focus:border-slate-900 focus:outline-none"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-700">
-                        Observação da Portaria (Opcional)
-                      </label>
-                      <input
-                        type="text"
-                        value={accessNotes}
-                        onChange={(e) => setAccessNotes(e.target.value)}
-                        placeholder="Ex: Placa ABC-1234 / Crachá 12"
-                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs focus:border-slate-900 focus:outline-none"
-                      />
-                    </div>
+                <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="flex items-center justify-between">
+                    <span className="rounded-full bg-slate-900 px-2.5 py-0.5 text-xs font-medium text-white">
+                      {checkedData.pass.visitorType === "SERVICE_PROVIDER"
+                        ? "Prestador de Serviço"
+                        : "Visitante"}
+                    </span>
+                    <span className="font-mono text-xs text-slate-500">
+                      #{checkedData.pass.code}
+                    </span>
                   </div>
 
-                  <div className="mt-4 grid grid-cols-2 gap-2.5">
+                  <h3 className="mt-3 text-lg font-semibold text-slate-900">
+                    {checkedData.pass.visitorName}
+                  </h3>
+                  {checkedData.pass.companyName && (
+                    <p className="text-xs text-slate-600">
+                      Empresa: {checkedData.pass.companyName}
+                    </p>
+                  )}
+                  <p className="mt-1 text-sm text-slate-700">
+                    Destino:{" "}
+                    <strong>
+                      Bloco {checkedData.pass.unit.block} - Apto{" "}
+                      {checkedData.pass.unit.number}
+                    </strong>
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    Autorizado por: {checkedData.pass.createdBy.name}
+                  </p>
+
+                  <div className="mt-3">
+                    <label className="mb-1 block text-xs font-medium text-slate-700">
+                      Documento (CPF ou RG){" "}
+                      {checkedData.pass.visitorType === "SERVICE_PROVIDER"
+                        ? "* (obrigatório)"
+                        : "(opcional)"}
+                    </label>
+                    <input
+                      type="text"
+                      value={visitorDocument}
+                      onChange={(e) => setVisitorDocument(e.target.value)}
+                      placeholder="Digite o documento conferido na portaria"
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-slate-900 focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-2 gap-2">
                     <button
                       type="button"
-                      disabled={
-                        !checkedData.validation.canEnter ||
-                        submitting ||
-                        (checkedData.pass.visitorType === "SERVICE_PROVIDER" &&
-                          visitorDocument.trim().length < 5)
-                      }
+                      disabled={submitting}
                       onClick={() => handleRegisterAccess("ENTRY")}
-                      className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 py-2 text-xs font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"
+                      className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 py-2.5 text-sm font-medium text-white transition hover:bg-emerald-700 disabled:opacity-60"
                     >
                       <LogIn className="h-4 w-4" />
-                      <span>Liberar Entrada</span>
+                      <span>Registrar Entrada</span>
                     </button>
 
                     <button
                       type="button"
                       disabled={submitting}
                       onClick={() => handleRegisterAccess("EXIT")}
-                      className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white py-2 text-xs font-semibold text-slate-800 transition hover:bg-slate-100 disabled:opacity-40"
+                      className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white py-2.5 text-sm font-medium text-slate-800 transition hover:bg-slate-100 disabled:opacity-60"
                     >
                       <LogOut className="h-4 w-4" />
                       <span>Registrar Saída</span>
@@ -446,11 +515,10 @@ export function ConciergeDashboard() {
             </div>
           </div>
 
-          {/* Histórico Recente */}
           <div className="lg:col-span-7">
             <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs">
               <h2 className="mb-4 text-base font-semibold text-slate-900">
-                Movimentações Recentes
+                Últimas Movimentações
               </h2>
 
               {loading ? (
@@ -459,79 +527,86 @@ export function ConciergeDashboard() {
                 </p>
               ) : logs.length === 0 ? (
                 <p className="text-sm text-slate-500">
-                  Nenhuma movimentação registrada na portaria.
+                  Nenhuma entrada ou saída registrada recentemente.
                 </p>
               ) : (
                 <div className="divide-y divide-slate-100">
-                  {logs.map((log) => (
-                    <div
-                      key={log.id}
-                      className="flex items-center justify-between py-3 first:pt-0 last:pb-0"
-                    >
-                      <div>
-                        <div className="flex items-center gap-2">
+                  {logs.map((log) => {
+                    const operatorName =
+                      log.registeredBy?.name ??
+                      log.concierge?.name ??
+                      log.user?.name ??
+                      "Portaria";
+
+                    return (
+                      <div
+                        key={log.id}
+                        className="flex items-center justify-between py-3 text-sm"
+                      >
+                        <div>
+                          <p className="font-medium text-slate-900">
+                            {log.pass?.visitorName ?? "Visitante"}
+                          </p>
+                          <p className="text-xs text-slate-500">
+                            Bloco {log.pass?.unit?.block ?? "-"} - Apto{" "}
+                            {log.pass?.unit?.number ?? "-"} • Porteiro:{" "}
+                            {operatorName}
+                          </p>
+                        </div>
+
+                        <div className="text-right">
                           <span
-                            className={`rounded px-2 py-0.5 text-xs font-semibold ${
-                              log.direction === "ENTRY"
+                            className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                              log.action === "ENTRY"
                                 ? "bg-emerald-50 text-emerald-700"
                                 : "bg-slate-100 text-slate-700"
                             }`}
                           >
-                            {log.direction === "ENTRY" ? "ENTRADA" : "SAÍDA"}
+                            {log.action === "ENTRY" ? "Entrada" : "Saída"}
                           </span>
-                          <span className="font-medium text-slate-900">
-                            {log.pass.visitorName}
-                          </span>
-                          <span className="text-xs text-slate-500">
-                            ({log.pass.unit.block} - {log.pass.unit.number})
-                          </span>
-                        </div>
-                        {log.notes && (
-                          <p className="mt-0.5 text-xs text-slate-500">
-                            Obs: {log.notes}
+                          <p className="mt-1 text-xs text-slate-400">
+                            {new Date(log.timestamp).toLocaleTimeString(
+                              "pt-PT",
+                              {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              },
+                            )}
                           </p>
-                        )}
+                        </div>
                       </div>
-
-                      <div className="text-right text-xs text-slate-500">
-                        <p>
-                          {new Date(log.timestamp).toLocaleTimeString("pt-BR", {
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
-                        </p>
-                        <p className="font-mono">{log.pass.code}</p>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
           </div>
         </div>
-      ) : (
+      )}
+
+      {/* ABA 2: ENCOMENDAS */}
+      {activeTab === "deliveries" && (
         <div className="grid gap-6 lg:grid-cols-12">
-          {/* Cadastro de Nova Encomenda */}
           <div className="lg:col-span-4">
             <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs">
               <h2 className="mb-4 text-base font-semibold text-slate-900">
-                Registrar Encomenda
+                Registrar Nova Encomenda
               </h2>
 
               <form onSubmit={handleCreateDelivery} className="space-y-3.5">
                 <div>
                   <label className="mb-1 block text-xs font-medium text-slate-700">
-                    Unidade Destino
+                    Unidade Destinatária
                   </label>
                   <select
+                    value={deliveryUnitId}
+                    onChange={(e) => setDeliveryUnitId(e.target.value)}
                     required
-                    value={unitId}
-                    onChange={(e) => setUnitId(e.target.value)}
                     className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-slate-900 focus:outline-none"
                   >
                     {units.map((u) => (
                       <option key={u.id} value={u.id}>
-                        {u.block} - Apto {u.number}
+                        Bloco {u.block} - Apto {u.number}
                       </option>
                     ))}
                   </select>
@@ -539,216 +614,140 @@ export function ConciergeDashboard() {
 
                 <div>
                   <label className="mb-1 block text-xs font-medium text-slate-700">
-                    Transportadora / Origem
+                    Descrição / Volume
                   </label>
                   <input
                     type="text"
                     required
-                    value={carrier}
-                    onChange={(e) => setCarrier(e.target.value)}
-                    placeholder="Ex: Mercado Livre, Correios, Amazon"
+                    value={deliveryDescription}
+                    onChange={(e) => setDeliveryDescription(e.target.value)}
+                    placeholder="Ex: Caixa média Amazon"
                     className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-900 focus:outline-none"
                   />
                 </div>
 
                 <div>
                   <label className="mb-1 block text-xs font-medium text-slate-700">
-                    Código de Rastreio (Opcional)
+                    Código de Rastreio (opcional)
                   </label>
                   <input
                     type="text"
-                    value={trackingCode}
-                    onChange={(e) => setTrackingCode(e.target.value)}
+                    value={deliveryTracking}
+                    onChange={(e) => setDeliveryTracking(e.target.value)}
                     placeholder="Ex: BR123456789"
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-900 focus:outline-none"
-                  />
-                </div>
-
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-slate-700">
-                    Descrição do Volume (Opcional)
-                  </label>
-                  <input
-                    type="text"
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    placeholder="Ex: Caixa média / Envelope"
                     className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-900 focus:outline-none"
                   />
                 </div>
 
                 <button
                   type="submit"
-                  disabled={submitting || units.length === 0}
+                  disabled={submitting}
                   className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-slate-900 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800 disabled:opacity-60"
                 >
                   <Plus className="h-4 w-4" />
-                  <span>Registrar e Gerar PIN</span>
+                  <span>Receber na Portaria</span>
                 </button>
               </form>
+
+              {deliveryMessage && (
+                <div
+                  className={`mt-4 rounded-lg border px-3 py-2.5 text-xs ${
+                    deliveryMessage.type === "success"
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                      : "border-red-200 bg-red-50 text-red-700"
+                  }`}
+                >
+                  {deliveryMessage.text}
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Lista de Encomendas + Modal de Retirada */}
-          <div className="space-y-4 lg:col-span-8">
-            {createdPinBanner && (
-              <div className="flex items-center justify-between rounded-xl border border-emerald-300 bg-emerald-50 p-4">
-                <div>
-                  <p className="text-xs font-semibold uppercase text-emerald-800">
-                    Encomenda Registrada ({createdPinBanner.unitLabel})
-                  </p>
-                  <p className="mt-1 text-sm text-emerald-900">
-                    PIN de retirada enviado ao morador:{" "}
-                    <strong className="ml-1 rounded bg-white px-2.5 py-0.5 font-mono text-base tracking-widest text-slate-900">
-                      {createdPinBanner.pin}
-                    </strong>
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setCreatedPinBanner(null)}
-                  className="text-xs font-medium text-emerald-800 hover:underline"
-                >
-                  Fechar
-                </button>
-              </div>
-            )}
-
-            {pickupTarget && (
-              <div className="rounded-xl border border-slate-300 bg-white p-5 shadow-sm">
-                <h3 className="text-base font-semibold text-slate-900">
-                  Confirmar Retirada — {pickupTarget.unit.block} Apto{" "}
-                  {pickupTarget.unit.number} ({pickupTarget.carrier})
-                </h3>
-
-                {pickupError && (
-                  <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-                    {pickupError}
-                  </div>
-                )}
-
-                <form
-                  onSubmit={handleConfirmPickup}
-                  className="mt-3 grid gap-3 sm:grid-cols-3"
-                >
-                  <div>
-                    <label className="mb-1 block text-xs font-medium text-slate-700">
-                      PIN de 4 Dígitos
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      maxLength={4}
-                      pattern="\d{4}"
-                      value={pickupPin}
-                      onChange={(e) => setPickupPin(e.target.value)}
-                      placeholder="0000"
-                      className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm tracking-widest focus:border-slate-900 focus:outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="mb-1 block text-xs font-medium text-slate-700">
-                      Nome de Quem Retirou
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={pickedUpBy}
-                      onChange={(e) => setPickedUpBy(e.target.value)}
-                      placeholder="Nome completo"
-                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-900 focus:outline-none"
-                    />
-                  </div>
-
-                  <div className="flex items-end gap-2">
-                    <button
-                      type="submit"
-                      disabled={submitting}
-                      className="w-full rounded-lg bg-emerald-600 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
-                    >
-                      Confirmar
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPickupTarget(null);
-                        setPickupError("");
-                      }}
-                      className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
-                    >
-                      Cancelar
-                    </button>
-                  </div>
-                </form>
-              </div>
-            )}
-
+          <div className="lg:col-span-8">
             <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs">
               <h2 className="mb-4 text-base font-semibold text-slate-900">
                 Encomendas na Portaria
               </h2>
 
-              {loading ? (
-                <p className="text-sm text-slate-500">
-                  Carregando encomendas...
-                </p>
-              ) : deliveries.length === 0 ? (
+              {deliveries.length === 0 ? (
                 <p className="text-sm text-slate-500">
                   Nenhuma encomenda registrada.
                 </p>
               ) : (
-                <div className="divide-y divide-slate-100">
+                <div className="space-y-3">
                   {deliveries.map((item) => (
                     <div
                       key={item.id}
-                      className="flex flex-col justify-between gap-3 py-3.5 first:pt-0 last:pb-0 sm:flex-row sm:items-center"
+                      className="rounded-xl border border-slate-200 p-4"
                     >
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="rounded bg-slate-900 px-2 py-0.5 text-xs font-semibold text-white">
-                            {item.unit.block} - {item.unit.number}
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <span className="text-xs font-semibold text-slate-500">
+                            Bloco {item.unit.block} - Apto {item.unit.number}
                           </span>
-                          <span className="font-semibold text-slate-900">
-                            {item.carrier}
-                          </span>
-                          {item.status === "PENDING" ? (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
-                              <Clock className="h-3 w-3" />
-                              Pendente
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
-                              <CheckCircle2 className="h-3 w-3" />
-                              Retirado
-                            </span>
+                          <h3 className="font-medium text-slate-900">
+                            {item.description}
+                          </h3>
+                          {item.trackingCode && (
+                            <p className="font-mono text-xs text-slate-500">
+                              Rastreio: {item.trackingCode}
+                            </p>
                           )}
                         </div>
-                        <p className="mt-1 text-xs text-slate-500">
-                          Recebido em{" "}
-                          {new Date(item.receivedAt).toLocaleString("pt-BR", {
-                            dateStyle: "short",
-                            timeStyle: "short",
-                          })}
-                          {item.description && ` · ${item.description}`}
-                          {item.pickedUpBy &&
-                            ` · Retirado por: ${item.pickedUpBy}`}
-                        </p>
+
+                        {item.status === "PENDING" ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPickupTargetId(
+                                pickupTargetId === item.id ? null : item.id,
+                              );
+                              setPickupPin("");
+                              setPickedUpBy("");
+                            }}
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-800"
+                          >
+                            <Clock className="h-3.5 w-3.5" />
+                            <span>Entregar com PIN</span>
+                          </button>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                            Retirado por {item.pickedUpBy}
+                          </span>
+                        )}
                       </div>
 
-                      {item.status === "PENDING" && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setPickupTarget(item);
-                            setPickupPin("");
-                            setPickedUpBy("");
-                            setPickupError("");
-                          }}
-                          className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-800 transition hover:bg-slate-50"
+                      {pickupTargetId === item.id && (
+                        <form
+                          onSubmit={handleConfirmPickup}
+                          className="mt-3 grid gap-2 border-t border-slate-100 pt-3 sm:grid-cols-3"
                         >
-                          Dar Baixa (PIN)
-                        </button>
+                          <input
+                            type="text"
+                            required
+                            maxLength={6}
+                            value={pickupPin}
+                            onChange={(e) => setPickupPin(e.target.value)}
+                            placeholder="PIN de 6 dígitos"
+                            className="rounded-lg border border-slate-300 px-3 py-1.5 font-mono text-sm"
+                          />
+                          <input
+                            type="text"
+                            required
+                            value={pickedUpBy}
+                            onChange={(e) => setPickedUpBy(e.target.value)}
+                            placeholder="Nome de quem retirou"
+                            className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm"
+                          />
+                          <button
+                            type="submit"
+                            disabled={submitting}
+                            className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700"
+                          >
+                            Confirmar Entrega
+                          </button>
+                        </form>
                       )}
                     </div>
                   ))}
@@ -758,6 +757,9 @@ export function ConciergeDashboard() {
           </div>
         </div>
       )}
+
+      {/* ABA 3: LIVRO DE OCORRÊNCIAS / PASSAGEM DE TURNO */}
+      {activeTab === "occurrences" && <OccurrencesBoard />}
     </AppLayout>
   );
 }

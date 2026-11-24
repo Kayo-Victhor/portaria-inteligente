@@ -51,3 +51,20 @@ export interface Delivery {
   unit: Pick<Unit, "id" | "block" | "number">;
   receivedBy: { id: string; name: string };
 }
+export type OccurrenceCategory =
+  | "SHIFT_HANDOFF"
+  | "MAINTENANCE"
+  | "INCIDENT"
+  | "GENERAL";
+
+export interface Occurrence {
+  id: string;
+  category: OccurrenceCategory;
+  title: string;
+  description: string;
+  isResolved: boolean;
+  resolvedAt: string | null;
+  createdAt: string;
+  author: { id: string; name: string; role: Role };
+  resolvedBy: { id: string; name: string } | null;
+}

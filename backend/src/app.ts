@@ -8,6 +8,7 @@ import { unitsRoutes } from "./modules/units/units.routes";
 import { usersRoutes } from "./modules/users/users.routes";
 import { passesRoutes } from "./modules/passes/passes.routes";
 import { deliveriesRoutes } from "./modules/deliveries/deliveries.routes";
+import { occurrencesRoutes } from "./modules/occurrences/occurrences.routes";
 
 const app = express();
 
@@ -30,6 +31,7 @@ app.use("/api/units", unitsRoutes);
 app.use("/api/users", usersRoutes);
 app.use("/api/passes", passesRoutes);
 app.use("/api/deliveries", deliveriesRoutes);
+app.use('/api/occurrences', occurrencesRoutes)
 
 app.use(globalErrorHandler);
 

@@ -69,6 +69,8 @@ model User {
   createdPasses  VisitorPass[]  @relation("CreatedByResident")
   validatedLogs  AccessLog[]    @relation("ValidatedByConcierge")
   receivedOrders Delivery[]     @relation("ReceivedByConcierge")
+  authoredOccurrences Occurrence[] @relation("OccurrenceAuthor")
+  resolvedOccurrences Occurrence[] @relation("OccurrenceResolver")
 
   @@index([unitId])
   @@map("users")
@@ -148,4 +150,30 @@ model Delivery {
 
   @@index([unitId, status])
   @@map("deliveries")
+}
+
+enum OccurrenceCategory {
+  SHIFT_HANDOFF
+  MAINTENANCE
+  INCIDENT
+  GENERAL
+}
+
+model Occurrence {
+  id           String             @id @default(uuid())
+  category     OccurrenceCategory @default(GENERAL)
+  title        String             @db.VarChar(120)
+  description  String             @db.Text
+  isResolved   Boolean            @default(false)
+  resolvedAt   DateTime?
+  createdAt    DateTime           @default(now())
+
+  authorId     String
+  author       User               @relation("OccurrenceAuthor", fields: [authorId], references: [id])
+
+  resolvedById String?
+  resolvedBy   User?              @relation("OccurrenceResolver", fields: [resolvedById], references: [id])
+
+  @@index([isResolved, createdAt])
+  @@map("occurrences")
 }

@@ -1,21 +1,53 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Building2, Users, Trash2, UserCheck, UserX } from "lucide-react";
+import {
+  Users,
+  Building2,
+  UserPlus,
+  Plus,
+  Shield,
+  BookOpen,
+} from "lucide-react";
 import { AxiosError } from "axios";
 import { api } from "../../api/client";
 import { AppLayout } from "../../components/AppLayout";
-import type { Role, Unit, User } from "../../types";
+import { OccurrencesBoard } from "../../components/OccurrencesBoard";
+import type { Role } from "../../types";
 
-const roleBadgeLabels: Record<Role, string> = {
-  ADMIN: "Admin",
-  CONCIERGE: "Portaria",
+interface UnitItem {
+  id: string;
+  block: string;
+  number: string;
+  floor?: number | null;
+  _count?: {
+    residents: number;
+  };
+}
+
+interface UserItem {
+  id: string;
+  name: string;
+  email: string;
+  role: Role;
+  isActive: boolean;
+  unit?: {
+    block: string;
+    number: string;
+  } | null;
+}
+
+const roleLabels: Record<Role, string> = {
+  ADMIN: "Administrador",
+  CONCIERGE: "Porteiro",
   RESIDENT: "Morador",
 };
 
 export function AdminDashboard() {
-  const [activeTab, setActiveTab] = useState<"users" | "units">("users");
+  const [activeTab, setActiveTab] = useState<"users" | "units" | "occurrences">(
+    "users",
+  );
 
-  const [users, setUsers] = useState<User[]>([]);
-  const [units, setUnits] = useState<Unit[]>([]);
+  const [users, setUsers] = useState<UserItem[]>([]);
+  const [units, setUnits] = useState<UnitItem[]>([]);
 
   // Formulário de Usuário
   const [name, setName] = useState("");
@@ -23,26 +55,43 @@ export function AdminDashboard() {
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<Role>("RESIDENT");
   const [unitId, setUnitId] = useState("");
-  const [userError, setUserError] = useState("");
+  const [userFeedback, setUserFeedback] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
 
   // Formulário de Unidade
   const [block, setBlock] = useState("");
   const [number, setNumber] = useState("");
-  const [unitError, setUnitError] = useState("");
+  const [unitFeedback, setUnitFeedback] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
+  async function loadAdminData() {
+    const [usersRes, unitsRes] = await Promise.all([
+      api.get<{ users: UserItem[] }>("/users"),
+      api.get<{ units: UnitItem[] }>("/units"),
+    ]);
+    setUsers(usersRes.data.users);
+    setUnits(unitsRes.data.units);
+    if (!unitId && unitsRes.data.units.length > 0) {
+      setUnitId(unitsRes.data.units[0].id);
+    }
+  }
+
   useEffect(() => {
     let isMounted = true;
 
-    async function loadAdminData() {
+    async function init() {
       try {
         const [usersRes, unitsRes] = await Promise.all([
-          api.get<{ users: User[] }>("/users"),
-          api.get<{ units: Unit[] }>("/units"),
+          api.get<{ users: UserItem[] }>("/users"),
+          api.get<{ units: UnitItem[] }>("/units"),
         ]);
-
         if (isMounted) {
           setUsers(usersRes.data.users);
           setUnits(unitsRes.data.units);
@@ -57,7 +106,7 @@ export function AdminDashboard() {
       }
     }
 
-    loadAdminData();
+    init();
 
     return () => {
       isMounted = false;
@@ -66,45 +115,48 @@ export function AdminDashboard() {
 
   async function handleCreateUser(e: FormEvent) {
     e.preventDefault();
-    setUserError("");
+    setUserFeedback(null);
     setSubmitting(true);
 
     try {
-      const response = await api.post<{ user: User }>("/users", {
+      await api.post("/users", {
         name,
         email,
         password,
         role,
-        unitId: role === "RESIDENT" ? unitId : null,
+        unitId: role === "RESIDENT" ? unitId : undefined,
       });
 
-      setUsers((prev) => [response.data.user, ...prev]);
+      setUserFeedback({
+        type: "success",
+        text: "Usuário cadastrado com sucesso!",
+      });
       setName("");
       setEmail("");
       setPassword("");
+      await loadAdminData();
     } catch (err) {
       if (err instanceof AxiosError && err.response?.data) {
         const data = err.response.data;
-        setUserError(
-          data.issues?.[0]?.message || data.message || "Erro ao criar usuário.",
-        );
+        setUserFeedback({
+          type: "error",
+          text:
+            data.issues?.[0]?.message ||
+            data.message ||
+            "Erro ao cadastrar usuário.",
+        });
       }
     } finally {
       setSubmitting(false);
     }
   }
 
-  async function handleToggleUserStatus(target: User) {
+  async function handleToggleUserStatus(user: UserItem) {
     try {
-      const response = await api.patch<{ user: User }>(
-        `/users/${target.id}/status`,
-        {
-          isActive: !target.isActive,
-        },
-      );
-      setUsers((prev) =>
-        prev.map((u) => (u.id === target.id ? response.data.user : u)),
-      );
+      await api.patch(`/users/${user.id}/status`, {
+        isActive: !user.isActive,
+      });
+      await loadAdminData();
     } catch (err) {
       if (err instanceof AxiosError && err.response?.data?.message) {
         alert(err.response.data.message);
@@ -114,48 +166,42 @@ export function AdminDashboard() {
 
   async function handleCreateUnit(e: FormEvent) {
     e.preventDefault();
-    setUnitError("");
+    setUnitFeedback(null);
     setSubmitting(true);
 
     try {
-      const response = await api.post<{ unit: Unit }>("/units", {
-        block,
-        number,
+      await api.post("/units", {
+        block: block.trim().toUpperCase(),
+        number: number.trim(),
       });
 
-      const createdUnit = {
-        ...response.data.unit,
-        _count: { residents: 0, deliveries: 0 },
-      };
-      setUnits((prev) => [...prev, createdUnit]);
-      if (!unitId) {
-        setUnitId(createdUnit.id);
-      }
+      setUnitFeedback({
+        type: "success",
+        text: "Unidade cadastrada com sucesso!",
+      });
       setBlock("");
       setNumber("");
+      await loadAdminData();
     } catch (err) {
-      if (err instanceof AxiosError && err.response?.data?.message) {
-        setUnitError(err.response.data.message);
+      if (err instanceof AxiosError && err.response?.data) {
+        const data = err.response.data;
+        setUnitFeedback({
+          type: "error",
+          text:
+            data.issues?.[0]?.message ||
+            data.message ||
+            "Erro ao cadastrar unidade.",
+        });
       }
     } finally {
       setSubmitting(false);
     }
   }
 
-  async function handleDeleteUnit(id: string) {
-    try {
-      await api.delete(`/units/${id}`);
-      setUnits((prev) => prev.filter((u) => u.id !== id));
-    } catch (err) {
-      if (err instanceof AxiosError && err.response?.data?.message) {
-        alert(err.response.data.message);
-      }
-    }
-  }
-
   return (
     <AppLayout>
-      <div className="mb-6 flex gap-2 border-b border-slate-200">
+      {/* Navegação por Abas */}
+      <div className="mb-6 flex border-b border-slate-200">
         <button
           type="button"
           onClick={() => setActiveTab("users")}
@@ -181,19 +227,42 @@ export function AdminDashboard() {
           <Building2 className="h-4 w-4" />
           <span>Unidades</span>
         </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab("occurrences")}
+          className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition ${
+            activeTab === "occurrences"
+              ? "border-slate-900 text-slate-900"
+              : "border-transparent text-slate-500 hover:text-slate-700"
+          }`}
+        >
+          <BookOpen className="h-4 w-4" />
+          <span>Livro de Turno</span>
+        </button>
       </div>
 
-      {activeTab === "users" ? (
+      {/* ABA 1: USUÁRIOS */}
+      {activeTab === "users" && (
         <div className="grid gap-6 lg:grid-cols-12">
           <div className="lg:col-span-4">
             <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs">
-              <h2 className="mb-4 text-base font-semibold text-slate-900">
-                Novo Usuário
-              </h2>
+              <div className="mb-4 flex items-center gap-2">
+                <UserPlus className="h-4 w-4 text-slate-700" />
+                <h2 className="text-base font-semibold text-slate-900">
+                  Novo Usuário
+                </h2>
+              </div>
 
-              {userError && (
-                <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-                  {userError}
+              {userFeedback && (
+                <div
+                  className={`mb-4 rounded-lg border px-3 py-2 text-xs ${
+                    userFeedback.type === "success"
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                      : "border-red-200 bg-red-50 text-red-700"
+                  }`}
+                >
+                  {userFeedback.text}
                 </div>
               )}
 
@@ -207,6 +276,7 @@ export function AdminDashboard() {
                     required
                     value={name}
                     onChange={(e) => setName(e.target.value)}
+                    placeholder="Ex: Ana Paula Silva"
                     className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-900 focus:outline-none"
                   />
                 </div>
@@ -220,13 +290,14 @@ export function AdminDashboard() {
                     required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
+                    placeholder="usuario@condominio.com"
                     className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-900 focus:outline-none"
                   />
                 </div>
 
                 <div>
                   <label className="mb-1 block text-xs font-medium text-slate-700">
-                    Senha Inicial (mín. 8 caracteres)
+                    Senha Inicial
                   </label>
                   <input
                     type="password"
@@ -234,6 +305,7 @@ export function AdminDashboard() {
                     minLength={8}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Mínimo 8 caracteres"
                     className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-900 focus:outline-none"
                   />
                 </div>
@@ -256,17 +328,17 @@ export function AdminDashboard() {
                 {role === "RESIDENT" && (
                   <div>
                     <label className="mb-1 block text-xs font-medium text-slate-700">
-                      Unidade Habitacional
+                      Unidade Vinculada
                     </label>
                     <select
-                      required
                       value={unitId}
                       onChange={(e) => setUnitId(e.target.value)}
+                      required
                       className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-slate-900 focus:outline-none"
                     >
                       {units.map((u) => (
                         <option key={u.id} value={u.id}>
-                          {u.block} - Apto {u.number}
+                          Bloco {u.block} - Apto {u.number}
                         </option>
                       ))}
                     </select>
@@ -276,9 +348,12 @@ export function AdminDashboard() {
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="w-full rounded-lg bg-slate-900 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800 disabled:opacity-60"
+                  className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-slate-900 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800 disabled:opacity-60"
                 >
-                  {submitting ? "Salvando..." : "Cadastrar Usuário"}
+                  <Plus className="h-4 w-4" />
+                  <span>
+                    {submitting ? "Salvando..." : "Cadastrar Usuário"}
+                  </span>
                 </button>
               </form>
             </div>
@@ -294,52 +369,38 @@ export function AdminDashboard() {
                 <p className="text-sm text-slate-500">Carregando usuários...</p>
               ) : (
                 <div className="divide-y divide-slate-100">
-                  {users.map((u) => (
+                  {users.map((user) => (
                     <div
-                      key={u.id}
-                      className="flex flex-col justify-between gap-3 py-3.5 first:pt-0 last:pb-0 sm:flex-row sm:items-center"
+                      key={user.id}
+                      className="flex flex-wrap items-center justify-between gap-2 py-3 text-sm"
                     >
                       <div>
                         <div className="flex items-center gap-2">
                           <span className="font-medium text-slate-900">
-                            {u.name}
+                            {user.name}
                           </span>
-                          <span className="rounded bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
-                            {roleBadgeLabels[u.role]}
+                          <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
+                            <Shield className="h-3 w-3" />
+                            {roleLabels[user.role]}
                           </span>
-                          {!u.isActive && (
-                            <span className="rounded bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">
-                              Inativo
-                            </span>
-                          )}
                         </div>
-                        <p className="mt-0.5 text-xs text-slate-500">
-                          {u.email}
-                          {u.unit &&
-                            ` · ${u.unit.block} - Apto ${u.unit.number}`}
+                        <p className="text-xs text-slate-500">
+                          {user.email}
+                          {user.unit &&
+                            ` • Bloco ${user.unit.block} - Apto ${user.unit.number}`}
                         </p>
                       </div>
 
                       <button
                         type="button"
-                        onClick={() => handleToggleUserStatus(u)}
-                        className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition ${
-                          u.isActive
-                            ? "border-red-200 text-red-700 hover:bg-red-50"
-                            : "border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                        onClick={() => handleToggleUserStatus(user)}
+                        className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition ${
+                          user.isActive
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                            : "border-slate-300 bg-slate-100 text-slate-600 hover:bg-slate-200"
                         }`}
                       >
-                        {u.isActive ? (
-                          <>
-                            <UserX className="h-3.5 w-3.5" />
-                            <span>Desativar</span>
-                          </>
-                        ) : (
-                          <>
-                            <UserCheck className="h-3.5 w-3.5" />
-                            <span>Reativar</span>
-                          </>
-                        )}
+                        {user.isActive ? "Ativo" : "Inativo"}
                       </button>
                     </div>
                   ))}
@@ -348,7 +409,10 @@ export function AdminDashboard() {
             </div>
           </div>
         </div>
-      ) : (
+      )}
+
+      {/* ABA 2: UNIDADES */}
+      {activeTab === "units" && (
         <div className="grid gap-6 lg:grid-cols-12">
           <div className="lg:col-span-4">
             <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs">
@@ -356,9 +420,15 @@ export function AdminDashboard() {
                 Nova Unidade
               </h2>
 
-              {unitError && (
-                <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-                  {unitError}
+              {unitFeedback && (
+                <div
+                  className={`mb-4 rounded-lg border px-3 py-2 text-xs ${
+                    unitFeedback.type === "success"
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                      : "border-red-200 bg-red-50 text-red-700"
+                  }`}
+                >
+                  {unitFeedback.text}
                 </div>
               )}
 
@@ -372,21 +442,21 @@ export function AdminDashboard() {
                     required
                     value={block}
                     onChange={(e) => setBlock(e.target.value)}
-                    placeholder="Ex: Bloco A"
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-900 focus:outline-none"
+                    placeholder="Ex: A"
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm uppercase focus:border-slate-900 focus:outline-none"
                   />
                 </div>
 
                 <div>
                   <label className="mb-1 block text-xs font-medium text-slate-700">
-                    Número do Apartamento
+                    Número do Apartamento / Casa
                   </label>
                   <input
                     type="text"
                     required
                     value={number}
                     onChange={(e) => setNumber(e.target.value)}
-                    placeholder="Ex: 304"
+                    placeholder="Ex: 102"
                     className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-900 focus:outline-none"
                   />
                 </div>
@@ -394,9 +464,10 @@ export function AdminDashboard() {
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="w-full rounded-lg bg-slate-900 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800 disabled:opacity-60"
+                  className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-slate-900 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800 disabled:opacity-60"
                 >
-                  {submitting ? "Salvando..." : "Cadastrar Unidade"}
+                  <Plus className="h-4 w-4" />
+                  <span>Cadastrar Unidade</span>
                 </button>
               </form>
             </div>
@@ -405,44 +476,33 @@ export function AdminDashboard() {
           <div className="lg:col-span-8">
             <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs">
               <h2 className="mb-4 text-base font-semibold text-slate-900">
-                Unidades Cadastradas
+                Unidades Cadastradas ({units.length})
               </h2>
 
-              {loading ? (
-                <p className="text-sm text-slate-500">Carregando unidades...</p>
-              ) : (
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {units.map((u) => (
-                    <div
-                      key={u.id}
-                      className="flex items-center justify-between rounded-lg border border-slate-200 p-3.5"
-                    >
-                      <div>
-                        <p className="font-semibold text-slate-900">
-                          {u.block} - Apto {u.number}
-                        </p>
-                        <p className="text-xs text-slate-500">
-                          {u._count?.residents ?? 0} morador(es) ·{" "}
-                          {u._count?.deliveries ?? 0} encomenda(s) pendente(s)
-                        </p>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteUnit(u.id)}
-                        title="Excluir unidade"
-                        className="rounded-lg p-1.5 text-slate-400 transition hover:bg-red-50 hover:text-red-600"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
+              <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
+                {units.map((unit) => (
+                  <div
+                    key={unit.id}
+                    className="rounded-xl border border-slate-200 bg-slate-50/60 p-3.5"
+                  >
+                    <p className="font-semibold text-slate-900">
+                      Bloco {unit.block} - Apto {unit.number}
+                    </p>
+                    {unit._count && (
+                      <p className="mt-1 text-xs text-slate-500">
+                        {unit._count.residents} morador(es) vinculado(s)
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>
       )}
+
+      {/* ABA 3: LIVRO DE OCORRÊNCIAS / PASSAGEM DE TURNO */}
+      {activeTab === "occurrences" && <OccurrencesBoard />}
     </AppLayout>
   );
 }
