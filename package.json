@@ -1,0 +1,13 @@
+{
+  "name": "portaria-inteligente",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n \"API,WEB\" -c \"blue,green\" \"pnpm --dir backend dev\" \"pnpm --dir frontend dev\"",
+    "dev:api": "pnpm --dir backend dev",
+    "dev:web": "pnpm --dir frontend dev",
+    "db:seed": "pnpm --dir backend exec tsx prisma/seed.ts"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
